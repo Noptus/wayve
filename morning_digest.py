@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from html import escape
@@ -12,9 +13,40 @@ import feedparser
 import requests
 from dateutil import parser as dt_parser
 
-PERPLEXITY_BASE_URL = os.environ.get("PERPLEXITY_BASE_URL", "https://api.perplexity.ai")
-PERPLEXITY_MODEL = os.environ.get("PERPLEXITY_MODEL", "sonar")
-PERPLEXITY_TIMEOUT = int(os.environ.get("PERPLEXITY_TIMEOUT", "60"))
+DEFAULT_PERPLEXITY_BASE_URL = "https://api.perplexity.ai"
+DEFAULT_PERPLEXITY_MODEL = "sonar"
+DEFAULT_PERPLEXITY_TIMEOUT = 60
+
+
+class PerplexityError(RuntimeError):
+    """Raised when Perplexity summarisation fails."""
+
+
+def load_env_file(path: str = ".env") -> None:
+    """Populate environment variables from a simple KEY=VALUE .env file."""
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                os.environ.setdefault(key, value)
+    except OSError as exc:
+        raise SystemExit(f"Failed to read {path}: {exc}")
+
+
+load_env_file()
+
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger("morning_digest")
 
 
 def load_feeds(csv_path: str) -> List[dict]:
@@ -67,7 +99,7 @@ def fetch_items(feeds: Sequence[dict], hours: int, per_feed: int = 10) -> List[d
         try:
             parsed = feedparser.parse(feed["url"])
         except Exception as exc:  # pragma: no cover - network edge cases
-            print(f"[WARN] Failed parsing {feed['name']}: {exc}")
+            logger.warning("Failed parsing %s: %s", feed["name"], exc)
             continue
         for entry in parsed.entries[:per_feed]:
             if not in_last_hours(entry, hours):
@@ -93,9 +125,19 @@ def dedupe(items: Iterable[dict]) -> List[dict]:
     return unique
 
 
+def _perplexity_config() -> tuple[str, str, int]:
+    base_url = os.environ.get("PERPLEXITY_BASE_URL", DEFAULT_PERPLEXITY_BASE_URL)
+    model = os.environ.get("PERPLEXITY_MODEL", DEFAULT_PERPLEXITY_MODEL)
+    timeout = int(os.environ.get("PERPLEXITY_TIMEOUT", str(DEFAULT_PERPLEXITY_TIMEOUT)))
+    return base_url, model, timeout
+
+
 def summarize_with_perplexity(items: Sequence[dict]) -> str:
     """Use Perplexity's Chat Completions API to generate HTML list items."""
-    api_key = os.environ["PERPLEXITY_API_KEY"]
+    api_key = os.environ.get("PERPLEXITY_API_KEY")
+    if not api_key:
+        raise PerplexityError("PERPLEXITY_API_KEY is not set")
+    base_url, model, timeout = _perplexity_config()
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -107,32 +149,55 @@ def summarize_with_perplexity(items: Sequence[dict]) -> str:
         f"{bullet_lines}"
     )
     payload = {
-        "model": PERPLEXITY_MODEL,
+        "model": model,
         "messages": [
             {"role": "system", "content": "You are a concise finance news editor."},
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.2,
     }
-    response = requests.post(
-        f"{PERPLEXITY_BASE_URL}/chat/completions",
-        json=payload,
-        headers=headers,
-        timeout=PERPLEXITY_TIMEOUT,
-    )
-    response.raise_for_status()
-    data = response.json()
-    return data["choices"][0]["message"]["content"]
+    try:
+        response = requests.post(
+            f"{base_url}/chat/completions",
+            json=payload,
+            headers=headers,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        data = response.json()
+        choices = data.get("choices")
+        if not choices:
+            raise PerplexityError("Perplexity response contained no choices")
+        message = choices[0].get("message") or {}
+        content = message.get("content")
+        if not content:
+            raise PerplexityError("Perplexity response missing summary content")
+        return content
+    except (requests.RequestException, ValueError) as exc:
+        raise PerplexityError(str(exc)) from exc
 
 
-def render_email(html_list: str, count: int) -> str:
+def build_fallback_html(items: Sequence[dict]) -> str:
+    """Format RSS items into HTML list items when Perplexity is unavailable."""
+    lines = []
+    for item in items:
+        safe_title = escape(item["title"])
+        safe_source = escape(item["source"])
+        safe_link = escape(item["link"], quote=True)
+        lines.append(f'<li><strong>{safe_source}</strong>: <a href="{safe_link}">{safe_title}</a></li>')
+    return "\n      ".join(lines)
+
+
+def render_email(html_list: str, count: int, used_fallback: bool = False) -> str:
     """Build the HTML email body."""
     today = datetime.now().strftime("%A, %d %b %Y")
+    summary_note = "Summaries provided by Perplexity." if not used_fallback else "Summaries unavailable; showing headlines."
     return f"""
 <html>
   <body>
     <h2>Morning Digest — {escape(today)}</h2>
-    <p>{count} highlights from the last 24&nbsp;hours:</p>
+    <p>{count} highlights from the last 24&nbsp;hours.</p>
+    <p style=\"color:#555;font-size:13px\">{escape(summary_note)}</p>
     <ul>
       {html_list}
     </ul>
@@ -154,9 +219,21 @@ def send_email(html_body: str, subject: str) -> None:
     message["To"] = os.environ["MAIL_TO"]
     message["Date"] = formatdate(localtime=True)
 
-    with smtplib.SMTP_SSL(os.environ["SMTP_SERVER"], int(os.environ["SMTP_PORT"])) as smtp:
-        smtp.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"])
-        smtp.send_message(message)
+    try:
+        with smtplib.SMTP_SSL(os.environ["SMTP_SERVER"], int(os.environ["SMTP_PORT"])) as smtp:
+            smtp.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"])
+            smtp.send_message(message)
+    except smtplib.SMTPException as exc:
+        raise RuntimeError(f"Failed to send email: {exc}") from exc
+
+
+def format_items_with_fallback(items: Sequence[dict]) -> tuple[str, bool]:
+    try:
+        html_list = summarize_with_perplexity(items)
+        return html_list, False
+    except PerplexityError as exc:
+        logger.warning("Perplexity summarisation failed: %s", exc)
+        return build_fallback_html(items), True
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -179,15 +256,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     items = dedupe(fetch_items(feeds, hours=args.hours, per_feed=args.per_feed))
 
     if not items:
-        print("No fresh items found; sending placeholder email.")
-        html = render_email("<li>No fresh items found in the last 24h.</li>", 0)
+        logger.info("No fresh items found; sending placeholder email.")
+        html = render_email("<li>No fresh items found in the last 24h.</li>", 0, used_fallback=True)
         send_email(html, "Morning Digest — No new items")
         return
 
     selected = items[: args.topn]
-    html_list = summarize_with_perplexity(selected)
-    body = render_email(html_list, len(selected))
-    send_email(body, "Morning Digest — Top highlights")
+    html_list, used_fallback = format_items_with_fallback(selected)
+    body = render_email(html_list, len(selected), used_fallback=used_fallback)
+    subject = "Morning Digest — Top highlights"
+    if used_fallback:
+        subject += " (headlines)"
+    send_email(body, subject)
 
 
 if __name__ == "__main__":

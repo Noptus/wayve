@@ -1,11 +1,11 @@
 name,rss_url,notes
-Exec Sum,https://www.execsum.co/feed,If 404 then the site may have disabled RSS; keep for reference
-Finimize Daily Brief,,No public RSS; consider Finimize API (AWS Marketplace) or email ingestion
-Road To Carry (PE Newsletter),,Beehiiv can expose RSS if enabled; ask owner or check for a generated .xml feed
-Beckford Capital Blog,https://www.beckfordcapital.com/blog-1-2?format=rss,Posts on FX/macro (Squarespace feed)
-Reuters Business & Markets,https://feeds.reuters.com/reuters/businessNews,High-signal global business headlines
-FT Due Diligence,https://www.ft.com/due-diligence?format=rss,FT M&A/PE scoop (paywalled content)
-Private Equity Wire,https://www.privateequitywire.co.uk/rss,PE industry headlines
-PitchBook News (Blog),https://pitchbook.com/news/rss,Deal flow & private markets (some items tease full article)
-Axios Pro Rata,https://www.axios.com/feeds/newsletters/pro-rata.xml,Daily deal & private markets brief (if this URL changes, check Axios RSS index)
-The Economist – Finance & economics,https://www.economist.com/finance-and-economics/rss.xml,Macro/finance context
+Exec Sum,https://www.execsum.co/feed,If 404 then RSS disabled by publisher
+Finimize Daily Brief,,No public RSS; consider API or email ingestion
+Road To Carry (PE Newsletter),,Beehiiv can enable an RSS .xml feed; ask owner
+Beckford Capital Blog,https://www.beckfordcapital.com/blog-1-2?format=rss,FX/macro
+Reuters Business & Markets,https://feeds.reuters.com/reuters/businessNews,Global business headlines
+FT Due Diligence,https://www.ft.com/due-diligence?format=rss,M&A/PE (FT paywall)
+Private Equity Wire,https://www.privateequitywire.co.uk/rss,PE industry
+PitchBook News (Blog),https://pitchbook.com/news/rss,Private markets
+Axios Pro Rata,https://www.axios.com/feeds/newsletters/pro-rata.xml,Daily deal brief
+The Economist – Finance & economics,https://www.economist.com/finance-and-economics/rss.xml,Macro/finance
