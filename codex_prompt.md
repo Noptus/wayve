@@ -3,15 +3,14 @@ You are Codex, an elite software automation agent. Create a repository named `mo
 1. `morning_digest.py`
    - CLI: `python morning_digest.py --csv rss_list.csv --topn 8 --hours 168 --per-feed 10`.
    - Loads RSS metadata from the CSV (skip blank URLs).
-   - Pulls up to `--per-feed` items per feed via `feedparser`.
-   - Keeps entries published in the last `--hours` hours (fall back to including if timestamp missing).
+   - Pulls up to `--per-feed` items per feed via `feedparser` and filters to the last `--hours` hours (accept entries with missing timestamps).
    - Deduplicates by lowercased title + link.
-   - Sends the top `--topn` items to Perplexity Chat Completions (OpenAI-compatible) using `requests` with headers `Authorization: Bearer $PERPLEXITY_API_KEY` and `Content-Type: application/json`.
-   - Prompt: "Turn each line into a tight, neutral, finance-friendly one-liner (≤18 words), keep the original link, no emojis, no numbering. Return as HTML <li><a>Title</a></li> list." Include a system message "You are a concise finance news editor.".
-   - Render an HTML email with a weekly headline, count, and footer mentioning automated delivery every Monday at 06:00 Paris time.
-   - Send via Gmail SMTP over SSL using `SMTP_SERVER`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`, `MAIL_TO` from env vars.
-   - If no fresh items, send placeholder HTML with a single `<li>` message and subject `"Weekly Digest — No new items"`.
-   - Provide configurable Perplexity base URL/model via env vars `PERPLEXITY_BASE_URL`, `PERPLEXITY_MODEL`, `PERPLEXITY_TIMEOUT`.
+   - Reads prompts from `prompts/system_prompt.txt` (system) and `prompts/user_prompt_template.txt` (user) to instruct Perplexity Chat Completions.
+   - Sends the top `--topn` items to Perplexity with headers `Authorization: Bearer $PERPLEXITY_API_KEY` and `Content-Type: application/json`; expects structured JSON containing highlights, category tags (`papers`, `benchmarks`, `tools`, `internal`), summaries, tag chips, market-impact commentary, and recommended actions.
+   - Renders the supplied HTML template (“Wayve weekly research brief”) with responsive styles, highlight chips, section cards, and footer CTAs populated from environment variables.
+   - Sends via Gmail SMTP over SSL using `SMTP_SERVER`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`, `MAIL_TO` from env vars.
+   - Provides fallbacks: if Perplexity fails, reuse the template with headline-only content and a warning banner; if no fresh items exist, send a quiet-week placeholder.
+   - Supports overrides for Perplexity base URL/model via env vars `PERPLEXITY_BASE_URL`, `PERPLEXITY_MODEL`, `PERPLEXITY_TIMEOUT`.
 
 2. `requirements.txt`
    - Contents:
@@ -52,8 +51,11 @@ You are Codex, an elite software automation agent. Create a repository named `mo
      - secrets: `PERPLEXITY_API_KEY`, `SMTP_USER`, `SMTP_PASS`
      - variables: `SMTP_SERVER`, `SMTP_PORT`, `MAIL_FROM`, `MAIL_TO`
 
-6. Documentation
-   - Update `README.md` with setup instructions, required env vars, and how to test locally.
+6. `prompts/system_prompt.txt` & `prompts/user_prompt_template.txt`
+   - Plain-text prompt files loaded at runtime. The system prompt sets editorial voice and JSON schema. The user prompt template is formatted with the selected feed items and look-back window.
+
+7. Documentation
+   - Update `README.md` with setup instructions, required and optional env vars, prompt editing guidance, and how to test locally.
 
 Constraints:
 - Keep files ASCII unless the content already demands otherwise.
