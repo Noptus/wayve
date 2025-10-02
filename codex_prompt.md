@@ -1,16 +1,16 @@
 You are Codex, an elite software automation agent. Create a repository named `morning-digest` with the following files and behaviour:
 
 1. `morning_digest.py`
-   - CLI: `python morning_digest.py --csv rss_list.csv --topn 8 --hours 24 --per-feed 10`.
+   - CLI: `python morning_digest.py --csv rss_list.csv --topn 8 --hours 168 --per-feed 10`.
    - Loads RSS metadata from the CSV (skip blank URLs).
    - Pulls up to `--per-feed` items per feed via `feedparser`.
    - Keeps entries published in the last `--hours` hours (fall back to including if timestamp missing).
    - Deduplicates by lowercased title + link.
    - Sends the top `--topn` items to Perplexity Chat Completions (OpenAI-compatible) using `requests` with headers `Authorization: Bearer $PERPLEXITY_API_KEY` and `Content-Type: application/json`.
    - Prompt: "Turn each line into a tight, neutral, finance-friendly one-liner (≤18 words), keep the original link, no emojis, no numbering. Return as HTML <li><a>Title</a></li> list." Include a system message "You are a concise finance news editor.".
-   - Render an HTML email with headline, count and footer mentioning automated delivery at 06:00 Paris time.
+   - Render an HTML email with a weekly headline, count, and footer mentioning automated delivery every Monday at 06:00 Paris time.
    - Send via Gmail SMTP over SSL using `SMTP_SERVER`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`, `MAIL_TO` from env vars.
-   - If no fresh items, send placeholder HTML with a single `<li>` message and subject `"Morning Digest — No new items"`.
+   - If no fresh items, send placeholder HTML with a single `<li>` message and subject `"Weekly Digest — No new items"`.
    - Provide configurable Perplexity base URL/model via env vars `PERPLEXITY_BASE_URL`, `PERPLEXITY_MODEL`, `PERPLEXITY_TIMEOUT`.
 
 2. `requirements.txt`
@@ -46,9 +46,9 @@ You are Codex, an elite software automation agent. Create a repository named `mo
 
 5. `.github/workflows/morning-digest.yml`
    - Workflow `name: morning-digest`.
-   - Trigger: schedule at `cron: "0 4 * * *"` (Paris 06:00) and `workflow_dispatch`.
+   - Trigger: schedule at `cron: "0 4 * * 1"` (Monday 06:00 Paris) and `workflow_dispatch`.
    - Env `TZ: Europe/Paris`.
-   - Steps: checkout, setup Python 3.11, install requirements, run `python morning_digest.py --csv rss_list.csv --topn 8 --hours 24` with env vars wired from GitHub secrets/variables:
+   - Steps: checkout, setup Python 3.11, install requirements, run `python morning_digest.py --csv rss_list.csv --topn 8 --hours 168` with env vars wired from GitHub secrets/variables:
      - secrets: `PERPLEXITY_API_KEY`, `SMTP_USER`, `SMTP_PASS`
      - variables: `SMTP_SERVER`, `SMTP_PORT`, `MAIL_FROM`, `MAIL_TO`
 

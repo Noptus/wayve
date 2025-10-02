@@ -1,0 +1,11 @@
+For the past {window_description}, we collected the following items from curated finance and private-markets feeds. Assume the audience already read Bloomberg's top stories; surface differentiated signals, primary research, and tactical insights.
+
+Return JSON exactly matching the agreed schema. Populate:
+- "highlights" with crisp 8-14 word phrases (no ending punctuation) that spotlight the most differentiated angles (3-6 entries).
+- For each item, craft summary/market_impact/action that build on the supplied details without repeating the headline verbatim.
+- If a feed item does not naturally map to the allowed categories, assign it to "papers" by default.
+
+Feed items:
+{items_block}
+
+Remember: output JSON only, no markdown fences or additional text.

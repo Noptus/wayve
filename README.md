@@ -1,6 +1,6 @@
-# Morning Digest
+# Weekly Digest
 
-Morning Digest compiles finance and private-markets headlines from curated RSS feeds, condenses them with the Perplexity API, and emails the highlights to your distribution list each morning at 06:00 Europe/Paris via GitHub Actions.
+Weekly Digest compiles finance and private-markets intelligence from curated RSS feeds, transforms it with the Perplexity API into a structured research brief, and emails the highlights to your distribution list every Monday at 06:00 Europe/Paris via GitHub Actions.
 
 ## Prerequisites
 - Python 3.11+
@@ -13,6 +13,7 @@ Morning Digest compiles finance and private-markets headlines from curated RSS f
 2. (Optional) Adjust Perplexity defaults in `.env` (`PERPLEXITY_MODEL`, `PERPLEXITY_TIMEOUT`).
 3. Edit `rss_list.csv` to add or remove sources. Leave `rss_url` blank when a publisher does not expose a feed—those rows are skipped automatically.
 4. Maintain `members.csv` for a quick reference to your subscriber roster (email, name, join date, interests).
+5. (Optional) Tailor the prompts in `prompts/system_prompt.txt` and `prompts/user_prompt_template.txt` to tweak tone, schema, or audience focus.
 
 The script automatically loads `.env` if present, so local runs can rely on environment variables declared in that file.
 
@@ -31,23 +32,39 @@ The script automatically loads `.env` if present, so local runs can rely on envi
 | `MAIL_TO` | Recipient list (comma-separated allowed) |
 | `LOG_LEVEL` | Optional log verbosity (`INFO`, `DEBUG`, etc.) |
 
+#### Optional environment variables
+| Variable | Purpose |
+| --- | --- |
+| `VIEW_IN_BROWSER_URL` | Link rendered in the "View online" button |
+| `ARCHIVE_URL` | Archive CTA in the footer |
+| `MANAGE_TOPICS_URL` | Preferences management CTA |
+| `UNSUBSCRIBE_URL` | Unsubscribe link in the footer |
+| `SENDER_NAME` | Name displayed in the copyright notice |
+| `SENDER_ADDRESS` | Mailing address shown in the footer |
+| `DIGEST_TZ` | IANA timezone name for the send timestamp (`Europe/Paris` default) |
+
 ## Install & Run Locally
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python morning_digest.py --csv rss_list.csv --hours 24 --topn 8
+python morning_digest.py --csv rss_list.csv --hours 168 --topn 8
 ```
 
-The script fetches up to 10 items per feed, filters for the last 24 hours, deduplicates, and asks Perplexity for one-line summaries. If the Perplexity API is unreachable or returns an invalid response, the email automatically falls back to formatted RSS headlines so delivery never fails.
+The script fetches up to 10 items per feed, filters for the last 7 days, deduplicates, and asks Perplexity for structured JSON that includes highlights, section tags, market-impact commentary, and suggested follow-up actions. If the Perplexity API is unavailable, the email automatically falls back to curated headlines while preserving the newsletter shell.
 
 ## GitHub Actions Automation
-The workflow in `.github/workflows/morning-digest.yml` runs daily at 04:00 UTC (06:00 Paris) and can also be triggered manually. Configure repository-level Secrets and Variables:
+The workflow in `.github/workflows/morning-digest.yml` runs every Monday at 04:00 UTC (06:00 Paris) and can also be triggered manually. Configure repository-level Secrets and Variables:
 
 - **Secrets**: `PERPLEXITY_API_KEY`, `SMTP_USER`, `SMTP_PASS`
 - **Variables**: `SMTP_SERVER` (`smtp.gmail.com`), `SMTP_PORT` (`465`), `MAIL_FROM`, `MAIL_TO`
 
-Once secrets are set, the workflow installs dependencies and executes `python morning_digest.py --csv rss_list.csv --topn 8 --hours 24` on `ubuntu-latest`.
+Once secrets are set, the workflow installs dependencies and executes `python morning_digest.py --csv rss_list.csv --topn 8 --hours 168` on `ubuntu-latest`, producing the fully branded HTML template.
+
+## Newsletter template & prompts
+- The HTML sent to subscribers mirrors `Wayve weekly research brief` from the design above and now includes sections for papers, benchmarks, tools, and internal notes, plus tag chips and market-impact commentary.
+- Edit `prompts/system_prompt.txt` or `prompts/user_prompt_template.txt` to adjust tone, schema, or category guidance. Changes take effect on the next run—no code edits required.
+- If you introduce new categories in the prompt, add them to `CATEGORY_SECTIONS` in `morning_digest.py` so they render with the correct section label.
 
 ## Maintaining Feeds
 - Add rows to `rss_list.csv` with `name`, `rss_url`, `notes`.
