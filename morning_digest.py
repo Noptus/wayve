@@ -380,11 +380,9 @@ def _render_tag_badges(tags: List[str]) -> str:
     badges = []
     for tag in tags:
         badges.append(
-            (
-                '<span style="display:inline-block;background:#1f2937;color:#93c5fd;'
-                "font-size:11px;font-weight:700;padding:2px 10px;border-radius:999px;"
-                f"margin-right:6px;margin-bottom:4px;">{escape(tag)}</span>"
-            )
+            f"<span style=\"display:inline-block;background:#1f2937;color:#93c5fd;"
+            f"font-size:11px;font-weight:700;padding:2px 10px;border-radius:999px;"
+            f"margin-right:6px;margin-bottom:4px;\">{escape(tag)}</span>"
         )
     return "".join(badges)
 
