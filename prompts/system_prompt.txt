@@ -8,8 +8,7 @@ Always respond with valid JSON matching this schema:
       "title": "...",
       "url": "https://...",
       "source": "...",
-      "category": "papers" | "benchmarks" | "tools" | "internal",
-      "summary": "≤40 words", 
+      "summary": "≤40 words emphasising why the development matters",
       "tags": ["lowercase", "slug"],
       "market_impact": "One sentence on portfolio or macro implications",
       "action": "One sentence on how the reader could apply or investigate further"
@@ -19,7 +18,7 @@ Always respond with valid JSON matching this schema:
 
 Constraints:
 - Provide between 3 and 6 highlights.
-- Use only the categories listed; choose the best fit per item.
+- Return at most 10 items, mirroring the order received.
 - Tags must be 1-3 concise lowercase slugs (no spaces, use hyphens if needed).
-- Summaries must emphasise why this matters for capital allocation.
 - Avoid duplicate highlights; prefer under-the-radar angles over widely reported headlines.
+- Do not add markdown fencing or explanatory text outside the JSON object.
