@@ -14,6 +14,7 @@ Weekly Digest compiles finance and private-markets intelligence from curated RSS
 3. Edit `rss_list.csv` to add or remove sources. Leave `rss_url` blank when a publisher does not expose a feed—those rows are skipped automatically.
 4. Maintain `members.csv` for a quick reference to your subscriber roster (email, name, join date, interests).
 5. (Optional) Tailor the prompts in `prompts/system_prompt.txt` and `prompts/user_prompt_template.txt` to tweak tone, schema, or audience focus.
+6. Keep `editorial.md` updated with a short, hand-written note — it renders ahead of the numbered articles.
 
 The script automatically loads `.env` if present, so local runs can rely on environment variables declared in that file.
 
@@ -35,7 +36,6 @@ The script automatically loads `.env` if present, so local runs can rely on envi
 #### Optional environment variables
 | Variable | Purpose |
 | --- | --- |
-| `VIEW_IN_BROWSER_URL` | Link rendered in the "View online" button |
 | `ARCHIVE_URL` | Archive CTA in the footer |
 | `MANAGE_TOPICS_URL` | Preferences management CTA |
 | `UNSUBSCRIBE_URL` | Unsubscribe link in the footer |
@@ -48,10 +48,10 @@ The script automatically loads `.env` if present, so local runs can rely on envi
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python morning_digest.py --csv rss_list.csv --hours 168 --topn 8
+python morning_digest.py --csv rss_list.csv --hours 168 --topn 10
 ```
 
-The script fetches up to 10 items per feed, filters for the last 7 days, deduplicates, and asks Perplexity for structured JSON that includes highlights, section tags, market-impact commentary, and suggested follow-up actions. If the Perplexity API is unavailable, the email automatically falls back to curated headlines while preserving the newsletter shell.
+The script fetches up to 10 items per feed, filters for the last 7 days, deduplicates, and asks Perplexity for structured JSON that includes highlights, market-impact commentary, and suggested follow-up actions. If the Perplexity API is unavailable, the email automatically falls back to curated headlines while preserving the newsletter shell.
 
 ## GitHub Actions Automation
 The workflow in `.github/workflows/morning-digest.yml` runs every Monday at 04:00 UTC (06:00 Paris) and can also be triggered manually. Configure repository-level Secrets and Variables:
@@ -59,12 +59,12 @@ The workflow in `.github/workflows/morning-digest.yml` runs every Monday at 04:0
 - **Secrets**: `PERPLEXITY_API_KEY`, `SMTP_USER`, `SMTP_PASS`
 - **Variables**: `SMTP_SERVER` (`smtp.gmail.com`), `SMTP_PORT` (`465`), `MAIL_FROM`, `MAIL_TO`
 
-Once secrets are set, the workflow installs dependencies and executes `python morning_digest.py --csv rss_list.csv --topn 8 --hours 168` on `ubuntu-latest`, producing the fully branded HTML template.
+Once secrets are set, the workflow installs dependencies and executes `python morning_digest.py --csv rss_list.csv --topn 10 --hours 168` on `ubuntu-latest`, producing the fully branded HTML template.
 
 ## Newsletter template & prompts
-- The HTML sent to subscribers mirrors `Wayve weekly research brief` from the design above and now includes sections for papers, benchmarks, tools, and internal notes, plus tag chips and market-impact commentary.
-- Edit `prompts/system_prompt.txt` or `prompts/user_prompt_template.txt` to adjust tone, schema, or category guidance. Changes take effect on the next run—no code edits required.
-- If you introduce new categories in the prompt, add them to `CATEGORY_SECTIONS` in `morning_digest.py` so they render with the correct section label.
+- The HTML sent to subscribers mirrors `Wayve weekly research brief` from the design above and now presents a numbered list (max 10) with tags, paywall badges, publication dates, and a hand-edited editorial intro.
+- Edit `prompts/system_prompt.txt` or `prompts/user_prompt_template.txt` to adjust tone, schema, or emphasis. Changes take effect on the next run—no code edits required.
+- Update `editorial.md` before each send to surface bespoke talking points.
 
 ## Maintaining Feeds
 - Add rows to `rss_list.csv` with `name`, `rss_url`, `notes`.

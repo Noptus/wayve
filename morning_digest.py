@@ -25,26 +25,7 @@ BASE_DIR = Path(__file__).resolve().parent
 PROMPTS_DIR = BASE_DIR / "prompts"
 SYSTEM_PROMPT_PATH = PROMPTS_DIR / "system_prompt.txt"
 USER_PROMPT_PATH = PROMPTS_DIR / "user_prompt_template.txt"
-
-CATEGORY_SECTIONS = {
-    "papers": {
-        "title": "🧪 New & notable papers",
-        "description": "Research and deep dives worth a close read.",
-    },
-    "benchmarks": {
-        "title": "📈 Benchmarks & eval",
-        "description": "Fresh performance signals and comparative tests.",
-    },
-    "tools": {
-        "title": "🧰 Tools worth trying",
-        "description": "Workflows, datasets, or frameworks to explore.",
-    },
-    "internal": {
-        "title": "🏠 Internal notes",
-        "description": "Wayve updates, internal research, and execution notes.",
-    },
-}
-
+EDITORIAL_PATH = BASE_DIR / "editorial.md"
 
 class PerplexityError(RuntimeError):
     """Raised when Perplexity summarisation fails."""
@@ -112,6 +93,60 @@ def _token_usage_payload(usage: Dict[str, Any] | None) -> Dict[str, int]:
     return {"prompt": prompt, "completion": completion, "total": total}
 
 
+def _markdown_to_html(text: str) -> str:
+    """Convert a minimal subset of Markdown to HTML."""
+    if not text.strip():
+        return ""
+    lines = text.strip().splitlines()
+    html_parts: List[str] = []
+    in_list = False
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped:
+            if in_list:
+                html_parts.append("</ul>")
+                in_list = False
+            continue
+        if stripped.startswith("# "):
+            if in_list:
+                html_parts.append("</ul>")
+                in_list = False
+            heading_text = escape(stripped[2:].strip())
+            html_parts.append(
+                "<h3 style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#f8fafc;font-size:16px;margin:0 0 6px 0;\">"
+                + heading_text
+                + "</h3>"
+            )
+        elif stripped.startswith("- "):
+            if not in_list:
+                html_parts.append(
+                    "<ul style=\"margin:0 0 10px 18px;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#cbd5f5;font-size:13px;line-height:20px;\">"
+                )
+                in_list = True
+            html_parts.append("<li>" + escape(stripped[2:].strip()) + "</li>")
+        else:
+            if in_list:
+                html_parts.append("</ul>")
+                in_list = False
+            html_parts.append(
+                "<p style=\"margin:0 0 10px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#e2e8f0;font-size:13px;line-height:20px;\">"
+                + escape(stripped)
+                + "</p>"
+            )
+    if in_list:
+        html_parts.append("</ul>")
+    return "\n".join(html_parts)
+
+
+def _load_editorial_html() -> str:
+    """Return rendered HTML for the editorial section if available."""
+    try:
+        content = EDITORIAL_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+    return _markdown_to_html(content)
+
+
 def load_feeds(csv_path: str) -> List[dict]:
     """Return a list of feeds that have a populated RSS URL."""
     feeds: List[dict] = []
@@ -158,11 +193,12 @@ def in_last_hours(entry: dict, hours: int) -> bool:
 def fetch_items(feeds: Sequence[dict], hours: int, per_feed: int = 10) -> List[dict]:
     """Collect feed entries that fall within the look-back window."""
     items: List[dict] = []
+    tz = _newsletter_timezone()
     for feed in feeds:
         try:
             parsed = feedparser.parse(feed["url"])
         except Exception as exc:  # pragma: no cover - network edge cases
-            logger.warning("Failed parsing %s: %s", feed["name"], exc)
+            logger.warning("Failed parsing %s: %s", feed.get("name", "Unknown"), exc)
             continue
         for entry in parsed.entries[:per_feed]:
             if not in_last_hours(entry, hours):
@@ -171,7 +207,25 @@ def fetch_items(feeds: Sequence[dict], hours: int, per_feed: int = 10) -> List[d
             link = (entry.get("link") or "").strip()
             if not link:
                 continue
-            items.append({"source": feed["name"], "title": title, "link": link})
+            published_dt = _entry_timestamp(entry)
+            published_display = "Date unavailable"
+            published_iso = ""
+            if published_dt:
+                published_local = published_dt.astimezone(tz)
+                published_display = published_local.strftime("%d %b %Y")
+                published_iso = published_local.isoformat()
+            notes = (feed.get("notes") or "").lower()
+            paywalled = any(keyword in notes for keyword in ("paywall", "paywalled", "subscription"))
+            items.append(
+                {
+                    "source": feed.get("name", "Unnamed Feed"),
+                    "title": title,
+                    "link": link,
+                    "published_display": published_display,
+                    "published_iso": published_iso,
+                    "paywalled": paywalled,
+                }
+            )
     return items
 
 
@@ -205,6 +259,8 @@ def _build_user_prompt(items: Sequence[dict], lookback_hours: int) -> str:
                     f"{idx}. Source: {item['source']}",
                     f"   Title: {item['title']}",
                     f"   URL: {item['link']}",
+                    f"   Published: {item.get('published_display', 'Date unavailable')}",
+                    f"   Paywalled: {'yes' if item.get('paywalled') else 'no'}",
                 )
             )
         )
@@ -266,6 +322,8 @@ def _sanitize_digest_payload(payload: Dict[str, Any], defaults: Sequence[dict]) 
 
     sanitised_items: List[Dict[str, Any]] = []
     for idx, base in enumerate(defaults):
+        if idx >= 10:
+            break
         candidate: Dict[str, Any] = {}
         if idx < len(raw_items) and isinstance(raw_items[idx], dict):
             candidate = raw_items[idx]
@@ -281,9 +339,6 @@ def _sanitize_digest_payload(payload: Dict[str, Any], defaults: Sequence[dict]) 
             candidate.get("action")
             or "Review the linked piece and note implications for your coverage list."
         ).strip()
-        category = str(candidate.get("category") or "papers").strip().lower()
-        if category not in CATEGORY_SECTIONS:
-            category = "papers"
         tags = _normalise_tags(candidate.get("tags"))
         sanitised_items.append(
             {
@@ -293,8 +348,10 @@ def _sanitize_digest_payload(payload: Dict[str, Any], defaults: Sequence[dict]) 
                 "summary": summary,
                 "market_impact": market_impact,
                 "action": action,
-                "category": category,
                 "tags": tags,
+                "paywalled": bool(base.get("paywalled", False)),
+                "published_display": base.get("published_display", "Date unavailable"),
+                "published_iso": base.get("published_iso", ""),
             }
         )
 
@@ -309,8 +366,10 @@ def _build_fallback_item(item: dict) -> Dict[str, Any]:
         "summary": "Perplexity unavailable; sharing headline details only.",
         "market_impact": "Review primary source to assess potential portfolio impact.",
         "action": "Scan the linked piece and flag follow-ups during Monday's stand-up.",
-        "category": "papers",
         "tags": ["headline"],
+        "paywalled": bool(item.get("paywalled", False)),
+        "published_display": item.get("published_display", "Date unavailable"),
+        "published_iso": item.get("published_iso", ""),
     }
 
 
@@ -409,7 +468,7 @@ def _render_tag_badges(tags: List[str]) -> str:
     return "".join(badges)
 
 
-def _render_item_card(item: Dict[str, Any]) -> str:
+def _render_item_card(index: int, item: Dict[str, Any]) -> str:
     title = escape(item["title"])
     url = escape(item["url"], quote=True)
     summary = escape(item["summary"])
@@ -417,19 +476,28 @@ def _render_item_card(item: Dict[str, Any]) -> str:
     market_impact = escape(item["market_impact"])
     action = escape(item["action"])
     tags_html = _render_tag_badges(item.get("tags", []))
+    published = escape(item.get("published_display", "Date unavailable"))
+    paywall_label = ""
+    if item.get("paywalled"):
+        paywall_label = (
+            "<span style=\"display:inline-block;background:#7c2d12;color:#fed7aa;"
+            "font-size:11px;font-weight:700;padding:2px 10px;border-radius:999px;"
+            "margin-left:8px;\">Paywalled</span>"
+        )
     return f"""
       <table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin:8px 0;background:#0f1b34;border:1px solid #122041;border-radius:12px;\">
-        <tr><td style=\"padding:14px 16px;\">
+        <tr><td style=\"padding:16px 18px;\">
+          <div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#64748b;font-size:12px;letter-spacing:.06em;text-transform:uppercase;font-weight:700;margin-bottom:6px;\">#{index:02d}</div>
           <a href=\"{url}\" style=\"text-decoration:none;\">
             <div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#e5f3ff;font-size:16px;line-height:22px;font-weight:700;margin:0 0 6px 0;\">
               {title}
             </div>
           </a>
-          <div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;font-size:13px;line-height:18px;margin-bottom:8px;\">
+          <div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;font-size:13px;line-height:18px;margin-bottom:10px;\">
             {summary}
           </div>
           <div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#a5b4fc;font-size:12px;line-height:18px;margin-bottom:8px;\">
-            Source: {source}
+            {published} · {source}{paywall_label}
           </div>
           <div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#60a5fa;font-size:12px;line-height:18px;margin-bottom:6px;\">
             Market impact: {market_impact}
@@ -437,11 +505,10 @@ def _render_item_card(item: Dict[str, Any]) -> str:
           <div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#38bdf8;font-size:12px;line-height:18px;margin-bottom:8px;\">
             How to use it: {action}
           </div>
-          <div style=\"margin-bottom:6px;\">
+          <div style=\"margin-bottom:2px;\">
             {tags_html}
           </div>
         </td></tr>
-        <tr><td align=\"center\" style=\"padding:0 0 8px 0;\"><div style=\"font-size:18px;line-height:18px;color:#1e3a8a;\">🌊</div></td></tr>
       </table>
     """.strip()
 
@@ -457,28 +524,6 @@ def _render_empty_card(message: str) -> str:
     """.strip()
 
 
-def _render_section(category: str, items: List[Dict[str, Any]]) -> str:
-    meta = CATEGORY_SECTIONS[category]
-    section_title = meta["title"]
-    description = meta["description"]
-    cards_html = "".join(_render_item_card(item) for item in items)
-    if not cards_html:
-        cards_html = _render_empty_card("No updates this week—consider spotlighting an internal research angle.")
-    return f"""
-    <tr>
-      <td style=\"padding:8px 24px 0 24px;\">
-        <div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#93c5fd;font-weight:800;letter-spacing:.02em;margin:8px 0 6px 0;\">{section_title}</div>
-        <div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#64748b;font-size:12px;line-height:18px;margin-bottom:6px;\">{escape(description)}</div>
-      </td>
-    </tr>
-    <tr>
-      <td style=\"padding:0 12px 8px 12px;\">
-{cards_html}
-      </td>
-    </tr>
-    """
-
-
 def render_email(
     digest: Dict[str, Any],
     lookback_hours: int,
@@ -486,11 +531,18 @@ def render_email(
 ) -> str:
     """Build the HTML email body using the branded template."""
     now = datetime.now(_newsletter_timezone())
-    heading, _ = _format_time_range(now, lookback_hours)
+    week_number = now.isocalendar().week
+    heading = f"🌊 Report - week {week_number:02d}"
     highlights = digest.get("highlights", [])
     if not highlights:
         highlights = ["Fresh intelligence from across the desk"]
-    highlight_sentence = "Highlights this week: " + ", ".join(escape(h) for h in highlights[:3]) + "."
+    article_items = digest.get("items", [])[:10]
+    article_count = len(article_items)
+    highlight_sentence = (
+        f"{article_count} article(s) curated this week. Highlights: "
+        + ", ".join(escape(h) for h in highlights[:3])
+        + "."
+    )
     fallback_notice = ""
     if used_fallback:
         fallback_notice = (
@@ -499,17 +551,22 @@ def render_email(
             "Perplexity summaries unavailable; serving curated headlines and manual notes." "</p></td></tr>"
         )
 
-    section_order = ["papers", "benchmarks", "tools", "internal"]
-    items_by_category: Dict[str, List[Dict[str, Any]]] = {cat: [] for cat in section_order}
-    for item in digest.get("items", []):
-        cat = item.get("category", "papers")
-        if cat not in items_by_category:
-            cat = "papers"
-        items_by_category[cat].append(item)
+    articles_html = "".join(
+        _render_item_card(idx + 1, item) for idx, item in enumerate(article_items)
+    )
+    if not articles_html:
+        articles_html = _render_empty_card("No items cleared editorial review for this cycle.")
 
-    sections_html = "".join(_render_section(cat, items_by_category[cat]) for cat in section_order)
+    editorial_html = _load_editorial_html()
+    editorial_section = ""
+    if editorial_html:
+        editorial_section = (
+            '<tr><td style="padding:18px 24px 0 24px;">'
+            '<div style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#93c5fd;font-weight:800;letter-spacing:.02em;margin:0 0 6px 0;">Editorial</div>'
+            f'<div style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#e2e8f0;font-size:13px;line-height:20px;">{editorial_html}</div>'
+            "</td></tr>"
+        )
 
-    view_url = escape(os.environ.get("VIEW_IN_BROWSER_URL", "#"), quote=True)
     archive_url = escape(os.environ.get("ARCHIVE_URL", "#"), quote=True)
     manage_url = escape(os.environ.get("MANAGE_TOPICS_URL", "#"), quote=True)
     unsubscribe_url = escape(os.environ.get("UNSUBSCRIBE_URL", "#"), quote=True)
@@ -517,6 +574,21 @@ def render_email(
     sender_address = escape(os.environ.get("SENDER_ADDRESS", "Paris, France"))
     send_time = escape(now.strftime("%H:%M %Z"))
     year = escape(str(now.year))
+
+    manage_cta = ""
+    if manage_url != "#":
+        manage_cta = (
+            f'<a href="{manage_url}" style="display:inline-block;margin-left:8px;background:#1f2937;color:#e5e7eb;text-decoration:none;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;font-size:12px;font-weight:800;padding:10px 14px;border-radius:999px;border:1px solid #374151;">Manage topics</a>'
+        )
+    archive_cta = ""
+    if archive_url != "#":
+        archive_cta = (
+            f'<a href="{archive_url}" style="display:inline-block;background:#1f2937;color:#e5e7eb;text-decoration:none;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;font-size:12px;font-weight:800;padding:10px 14px;border-radius:999px;border:1px solid #374151;">View archive</a>'
+        )
+
+    footer_ctas = ""
+    if archive_cta or manage_cta:
+        footer_ctas = f"{archive_cta}{manage_cta}"
 
     return f"""<!doctype html>
 <html lang=\"en\">
@@ -531,7 +603,7 @@ def render_email(
   </style>
 </head>
 <body style=\"margin:0;padding:0;background:#0f172a;\">
-  <div class=\"preheader\">A crisp weekly on papers, benchmarks, and tools — 5-minute skim.</div>
+  <div class=\"preheader\">Wayve's weekly brief on finance intel and tucked-away research notes.</div>
 
   <table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" border=\"0\" style=\"background:#0f172a;\">
     <tr>
@@ -544,16 +616,11 @@ def render_email(
                   <td align=\"left\">
                     <div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#01344a;font-size:12px;letter-spacing:.08em;text-transform:uppercase;font-weight:800;\">Wayve weekly research brief</div>
                     <div class=\"title-xl\" style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#001a29;font-size:26px;line-height:32px;font-weight:800;margin-top:6px;\">
-                      🌊 {escape(heading)}
+                      {escape(heading)}
                     </div>
                     <div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#063142;font-size:14px;line-height:20px;margin-top:6px;\">
-                      A 5-minute scan across papers, benchmarks, tools & internal notes.
+                      A 5-minute skim tracking what didn't make the Bloomberg homepage.
                     </div>
-                  </td>
-                  <td class=\"stack\" align=\"right\" style=\"vertical-align:top;\">
-                    <a href=\"{view_url}\" style=\"display:inline-block;background:#0b1224;color:#a7f3d0;text-decoration:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;font-weight:800;padding:10px 14px;border-radius:999px;border:1px solid rgba(10,22,40,.2);\">
-                      View online ↗
-                    </a>
                   </td>
                 </tr>
               </table>
@@ -568,17 +635,22 @@ def render_email(
             </td>
           </tr>
           {fallback_notice}
-{sections_html}
+          {editorial_section}
+          <tr>
+            <td style=\"padding:12px 24px 8px 24px;\">
+              <div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#93c5fd;font-weight:800;letter-spacing:.02em;margin:8px 0 6px 0;\">Market intelligence</div>
+            </td>
+          </tr>
+          <tr>
+            <td style=\"padding:0 12px 8px 12px;\">
+              {articles_html}
+            </td>
+          </tr>
 
           <tr>
             <td style=\"padding:8px 24px 20px 24px;\">
               <table role=\"presentation\" width=\"100%\">
-                <tr>
-                  <td class=\"stack\" style=\"padding:10px 0;\">
-                    <a href=\"{archive_url}\" style=\"display:inline-block;background:#1f2937;color:#e5e7eb;text-decoration:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;font-weight:800;padding:10px 14px;border-radius:999px;border:1px solid #374151;\">View archive</a>
-                    <a href=\"{manage_url}\" style=\"display:inline-block;margin-left:8px;background:#1f2937;color:#e5e7eb;text-decoration:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;font-weight:800;padding:10px 14px;border-radius:999px;border:1px solid #374151;\">Manage topics</a>
-                  </td>
-                </tr>
+                {f'<tr><td class="stack" style="padding:10px 0;">{footer_ctas}</td></tr>' if footer_ctas else ''}
                 <tr>
                   <td style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#9ca3af;font-size:11px;line-height:17px;\">
                     Sent from Paris at ~{send_time}. Some links may require a subscription.
@@ -652,7 +724,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         default=168,
         help="Look-back window for feed entries",
     )
-    parser.add_argument("--topn", type=int, default=8, help="Number of entries to include in the digest")
+    parser.add_argument("--topn", type=int, default=10, help="Number of entries to include in the digest")
     parser.add_argument(
         "--per-feed",
         type=int,
@@ -669,6 +741,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     if not items:
         logger.info("No fresh items found; sending placeholder email.")
+        now_local = datetime.now(_newsletter_timezone())
         quiet_digest = {
             "highlights": [
                 f"No tracked updates in {_window_description(args.hours)}"
@@ -681,25 +754,27 @@ def main(argv: Sequence[str] | None = None) -> None:
                     "summary": "Feeds were quiet; we'll resume next week with fresh intelligence.",
                     "market_impact": "No immediate market-moving headlines detected across monitored sources.",
                     "action": "Use the lull to review positioning and backlog research tasks.",
-                    "category": "internal",
                     "tags": ["quiet-week"],
+                    "paywalled": False,
+                    "published_display": now_local.strftime("%d %b %Y"),
+                    "published_iso": now_local.isoformat(),
                 }
             ],
         }
         body = render_email(quiet_digest, args.hours, used_fallback=True)
-        now_local = datetime.now(_newsletter_timezone())
-        _, week_range = _format_time_range(now_local, args.hours)
-        subject = f"Weekly Digest — Week of {week_range} (no new items)"
+        week_number = now_local.isocalendar().week
+        subject = f"Weekly Digest — Week {week_number:02d} (no new items)"
         sent = send_email(body, subject)
         _report_delivery(sent, {"prompt": 0, "completion": 0, "total": 0})
         return
 
-    selected = items[: args.topn]
+    max_articles = min(args.topn, 10)
+    selected = items[:max_articles]
     digest, used_fallback, usage = build_digest_payload(selected, args.hours)
     body = render_email(digest, args.hours, used_fallback=used_fallback)
     now_local = datetime.now(_newsletter_timezone())
-    _, week_range = _format_time_range(now_local, args.hours)
-    subject = f"Weekly Digest — Week of {week_range}"
+    week_number = now_local.isocalendar().week
+    subject = f"Weekly Digest — Week {week_number:02d}"
     if used_fallback:
         subject += " (headlines)"
     sent = send_email(body, subject)

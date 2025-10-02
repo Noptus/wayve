@@ -1,0 +1,1 @@
+Next Wayve meetup in London is in 2 weeks, and a pretty calm market situation overall.

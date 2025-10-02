@@ -3,7 +3,7 @@ For the past {window_description}, we collected the following items from curated
 Return JSON exactly matching the agreed schema. Populate:
 - "highlights" with crisp 8-14 word phrases (no ending punctuation) that spotlight the most differentiated angles (3-6 entries).
 - For each item, craft summary/market_impact/action that build on the supplied details without repeating the headline verbatim.
-- If a feed item does not naturally map to the allowed categories, assign it to "papers" by default.
+- Keep the output order identical to the feed order you receive. If fewer than 10 items are supplied, return the same number.
 
 Feed items:
 {items_block}
