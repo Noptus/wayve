@@ -30,7 +30,7 @@ The script automatically loads `.env` if present, so local runs can rely on envi
 | `SMTP_USER` | Gmail address that owns the App Password |
 | `SMTP_PASS` | Gmail App Password |
 | `MAIL_FROM` | Friendly From email sent to subscribers |
-| `MAIL_TO` | Recipient list (comma-separated allowed) |
+| `MAIL_TO` | Optional extra recipients or fallback list (comma-separated) |
 | `LOG_LEVEL` | Optional log verbosity (`INFO`, `DEBUG`, etc.) |
 
 #### Optional environment variables
@@ -42,13 +42,14 @@ The script automatically loads `.env` if present, so local runs can rely on envi
 | `SENDER_NAME` | Name displayed in the copyright notice |
 | `SENDER_ADDRESS` | Mailing address shown in the footer |
 | `DIGEST_TZ` | IANA timezone name for the send timestamp (`Europe/Paris` default) |
+| `MEMBERS_CSV` | Path to CSV listing subscriber emails (defaults to `members.csv` in repo) |
 
 ## Install & Run Locally
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python morning_digest.py --csv rss_list.csv --hours 168 --topn 10
+python morning_digest.py --csv rss_list.csv --hours 168 --topn 10 --members-csv members.csv
 ```
 
 The script fetches up to 10 items per feed, filters for the last 7 days, deduplicates, and asks Perplexity for structured JSON that includes highlights, market-impact commentary, and suggested follow-up actions. If the Perplexity API is unavailable, the email automatically falls back to curated headlines while preserving the newsletter shell.
@@ -57,7 +58,7 @@ The script fetches up to 10 items per feed, filters for the last 7 days, dedupli
 The workflow in `.github/workflows/morning-digest.yml` runs every Monday at 04:00 UTC (06:00 Paris) and can also be triggered manually. Configure repository-level Secrets and Variables:
 
 - **Secrets**: `PERPLEXITY_API_KEY`, `SMTP_USER`, `SMTP_PASS`
-- **Variables**: `SMTP_SERVER` (`smtp.gmail.com`), `SMTP_PORT` (`465`), `MAIL_FROM`, `MAIL_TO`
+- **Variables**: `SMTP_SERVER` (`smtp.gmail.com`), `SMTP_PORT` (`465`), `MAIL_FROM`, `MAIL_TO`, `MEMBERS_CSV`
 
 Once secrets are set, the workflow installs dependencies and executes `python morning_digest.py --csv rss_list.csv --topn 10 --hours 168` on `ubuntu-latest`, producing the fully branded HTML template.
 
@@ -80,4 +81,8 @@ Once secrets are set, the workflow installs dependencies and executes `python mo
 - When the digest email shows “Summaries unavailable; showing headlines.”, Perplexity was unreachable or the API key is missing. Investigate network or credential issues while the job continues delivering headlines.
 
 ## Testing
-Use pytest (mocking out external calls) to extend coverage. Example entry point for future tests lives in `tests/test_digest.py` as specified in `codex_prompt.md`.
+Install dev dependencies (`python -m pip install pytest`) and run:
+```bash
+python -m pytest
+```
+The suite stubs Perplexity, feed fetching, and SMTP delivery so you can validate the workflow without hitting external services or mailing subscribers.
