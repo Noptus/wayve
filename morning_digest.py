@@ -73,12 +73,73 @@ SYSTEM_PROMPT = _load_prompt(SYSTEM_PROMPT_PATH)
 USER_PROMPT_TEMPLATE = _load_prompt(USER_PROMPT_PATH)
 
 
-def _mail_recipients() -> List[str]:
-    """Return the list of recipient email addresses."""
-    raw = os.environ.get("MAIL_TO", "")
-    recipients = [addr.strip() for addr in raw.split(",") if addr.strip()]
+def _load_member_emails(path: str) -> List[str]:
+    """Return unique email addresses from the provided members CSV file."""
+    csv_path = Path(path)
+    if not csv_path.is_absolute():
+        csv_path = (BASE_DIR / csv_path).resolve()
+    try:
+        with csv_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+
+            fieldnames = reader.fieldnames or []
+            mapping = {name.lower(): name for name in fieldnames}
+            email_column = mapping.get("email")
+            if not email_column:
+                raise SystemExit(
+                    f"Members CSV {csv_path} is missing an 'email' column"
+                )
+
+            recipients: List[str] = []
+            seen: set[str] = set()
+            for row in reader:
+                address = (row.get(email_column) or "").strip()
+                if not address:
+                    continue
+                normalised = address.lower()
+                if normalised in seen:
+                    continue
+                seen.add(normalised)
+                recipients.append(address)
+    except FileNotFoundError as exc:
+        raise SystemExit(f"Members CSV not found: {csv_path}") from exc
+    except OSError as exc:
+        raise SystemExit(f"Failed to read {csv_path}: {exc}") from exc
+
     if not recipients:
-        raise SystemExit("MAIL_TO is not set or contains no valid addresses.")
+        raise SystemExit(f"No email addresses found in members CSV {csv_path}.")
+    logger.info("Loaded %d recipient(s) from %s", len(recipients), csv_path)
+    return recipients
+
+
+def _mail_recipients(members_csv: str | None = None) -> List[str]:
+    """Return the list of recipient email addresses from CSV and env fallbacks."""
+    recipients: List[str] = []
+    seen: set[str] = set()
+
+    if members_csv:
+        for address in _load_member_emails(members_csv):
+            normalised = address.lower()
+            if normalised in seen:
+                continue
+            seen.add(normalised)
+            recipients.append(address)
+
+    raw_env = os.environ.get("MAIL_TO", "")
+    for entry in raw_env.split(","):
+        address = entry.strip()
+        if not address:
+            continue
+        normalised = address.lower()
+        if normalised in seen:
+            continue
+        seen.add(normalised)
+        recipients.append(address)
+
+    if not recipients:
+        raise SystemExit(
+            "No recipients configured; set MAIL_TO or provide a members CSV."
+        )
     return recipients
 
 
@@ -671,7 +732,7 @@ def render_email(
 """
 
 
-def send_email(html_body: str, subject: str) -> int:
+def send_email(html_body: str, subject: str, recipients: Sequence[str]) -> int:
     """Send the digest via Gmail SMTP and return recipient count."""
     import smtplib
     from email.mime.text import MIMEText
@@ -680,14 +741,13 @@ def send_email(html_body: str, subject: str) -> int:
     message = MIMEText(html_body, "html", "utf-8")
     message["Subject"] = subject
     message["From"] = os.environ["MAIL_FROM"]
-    recipients = _mail_recipients()
     message["To"] = ", ".join(recipients)
     message["Date"] = formatdate(localtime=True)
 
     try:
         with smtplib.SMTP_SSL(os.environ["SMTP_SERVER"], int(os.environ["SMTP_PORT"])) as smtp:
             smtp.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"])
-            smtp.send_message(message, to_addrs=recipients)
+            smtp.send_message(message, to_addrs=list(recipients))
     except smtplib.SMTPException as exc:
         raise RuntimeError(f"Failed to send email: {exc}") from exc
     return len(recipients)
@@ -717,6 +777,11 @@ def build_digest_payload(
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Compile and email a weekly finance digest.")
+    default_members_csv = os.environ.get("MEMBERS_CSV")
+    if not default_members_csv:
+        repo_members = BASE_DIR / "members.csv"
+        if repo_members.exists():
+            default_members_csv = str(repo_members)
     parser.add_argument("--csv", required=True, help="CSV file containing feed metadata")
     parser.add_argument(
         "--hours",
@@ -731,6 +796,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         default=10,
         help="Maximum number of items fetched per feed before filtering",
     )
+    parser.add_argument(
+        "--members-csv",
+        default=default_members_csv,
+        help=(
+            "CSV file listing recipient emails (uses 'email' column). "
+            "Falls back to MAIL_TO when omitted."
+        ),
+    )
     args = parser.parse_args(argv)
 
     feeds = load_feeds(args.csv)
@@ -738,6 +811,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise SystemExit(f"No feeds found in {args.csv}.")
 
     items = dedupe(fetch_items(feeds, hours=args.hours, per_feed=args.per_feed))
+    members_csv = args.members_csv or None
+    recipients = _mail_recipients(members_csv)
 
     if not items:
         logger.info("No fresh items found; sending placeholder email.")
@@ -764,7 +839,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         body = render_email(quiet_digest, args.hours, used_fallback=True)
         week_number = now_local.isocalendar().week
         subject = f"Weekly Digest — Week {week_number:02d} (no new items)"
-        sent = send_email(body, subject)
+        sent = send_email(body, subject, recipients)
         _report_delivery(sent, {"prompt": 0, "completion": 0, "total": 0})
         return
 
@@ -777,7 +852,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     subject = f"Weekly Digest — Week {week_number:02d}"
     if used_fallback:
         subject += " (headlines)"
-    sent = send_email(body, subject)
+    sent = send_email(body, subject, recipients)
     _report_delivery(sent, usage)
 
 
