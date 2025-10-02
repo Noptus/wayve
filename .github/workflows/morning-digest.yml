@@ -2,8 +2,8 @@ name: morning-digest
 
 on:
   schedule:
-    # GitHub Actions runs on UTC. 06:00 Paris (CET/CEST) ≈ 04:00 UTC.
-    - cron: "0 4 * * *"
+    # GitHub Actions runs on UTC. Monday 06:00 Paris (CET/CEST) ≈ 04:00 UTC.
+    - cron: "0 4 * * 1"
   workflow_dispatch:
 
 env:
@@ -36,4 +36,4 @@ jobs:
           MAIL_FROM: ${{ vars.MAIL_FROM }}
           MAIL_TO: ${{ vars.MAIL_TO }}
         run: |
-          python morning_digest.py --csv rss_list.csv --topn 8 --hours 24
+          python morning_digest.py --csv rss_list.csv --topn 10 --hours 168

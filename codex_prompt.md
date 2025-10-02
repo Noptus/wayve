@@ -1,17 +1,17 @@
 You are Codex, an elite software automation agent. Create a repository named `morning-digest` with the following files and behaviour:
 
 1. `morning_digest.py`
-   - CLI: `python morning_digest.py --csv rss_list.csv --topn 8 --hours 24 --per-feed 10`.
+   - CLI: `python morning_digest.py --csv rss_list.csv --topn 10 --hours 168 --per-feed 10`.
    - Loads RSS metadata from the CSV (skip blank URLs).
-   - Pulls up to `--per-feed` items per feed via `feedparser`.
-   - Keeps entries published in the last `--hours` hours (fall back to including if timestamp missing).
+   - Pulls up to `--per-feed` items per feed via `feedparser` and filters to the last `--hours` hours (accept entries with missing timestamps).
    - Deduplicates by lowercased title + link.
-   - Sends the top `--topn` items to Perplexity Chat Completions (OpenAI-compatible) using `requests` with headers `Authorization: Bearer $PERPLEXITY_API_KEY` and `Content-Type: application/json`.
-   - Prompt: "Turn each line into a tight, neutral, finance-friendly one-liner (≤18 words), keep the original link, no emojis, no numbering. Return as HTML <li><a>Title</a></li> list." Include a system message "You are a concise finance news editor.".
-   - Render an HTML email with headline, count and footer mentioning automated delivery at 06:00 Paris time.
-   - Send via Gmail SMTP over SSL using `SMTP_SERVER`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`, `MAIL_TO` from env vars.
-   - If no fresh items, send placeholder HTML with a single `<li>` message and subject `"Morning Digest — No new items"`.
-   - Provide configurable Perplexity base URL/model via env vars `PERPLEXITY_BASE_URL`, `PERPLEXITY_MODEL`, `PERPLEXITY_TIMEOUT`.
+   - Reads prompts from `prompts/system_prompt.txt` (system) and `prompts/user_prompt_template.txt` (user) to instruct Perplexity Chat Completions.
+   - Sends at most ten curated items to Perplexity with headers `Authorization: Bearer $PERPLEXITY_API_KEY` and `Content-Type: application/json`; expects structured JSON containing highlights, summaries, tag chips, market-impact commentary, and recommended actions.
+   - Detects likely paywalled sources via feed notes, records publication dates, and uses that metadata in the final email.
+   - Renders the supplied HTML template (“Wayve weekly research brief”) with responsive styles, a hand-authored editorial section (`editorial.md`), numbered articles, paywall badges, and footer CTAs populated from environment variables.
+   - Sends via Gmail SMTP over SSL using `SMTP_SERVER`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`, `MAIL_TO` from env vars.
+   - Provides fallbacks: if Perplexity fails, reuse the template with headline-only content and a warning banner; if no fresh items exist, send a quiet-week placeholder.
+   - Supports overrides for Perplexity base URL/model via env vars `PERPLEXITY_BASE_URL`, `PERPLEXITY_MODEL`, `PERPLEXITY_TIMEOUT`.
 
 2. `requirements.txt`
    - Contents:
@@ -46,14 +46,20 @@ You are Codex, an elite software automation agent. Create a repository named `mo
 
 5. `.github/workflows/morning-digest.yml`
    - Workflow `name: morning-digest`.
-   - Trigger: schedule at `cron: "0 4 * * *"` (Paris 06:00) and `workflow_dispatch`.
+   - Trigger: schedule at `cron: "0 4 * * 1"` (Monday 06:00 Paris) and `workflow_dispatch`.
    - Env `TZ: Europe/Paris`.
-   - Steps: checkout, setup Python 3.11, install requirements, run `python morning_digest.py --csv rss_list.csv --topn 8 --hours 24` with env vars wired from GitHub secrets/variables:
+   - Steps: checkout, setup Python 3.11, install requirements, run `python morning_digest.py --csv rss_list.csv --topn 8 --hours 168` with env vars wired from GitHub secrets/variables:
      - secrets: `PERPLEXITY_API_KEY`, `SMTP_USER`, `SMTP_PASS`
      - variables: `SMTP_SERVER`, `SMTP_PORT`, `MAIL_FROM`, `MAIL_TO`
 
-6. Documentation
-   - Update `README.md` with setup instructions, required env vars, and how to test locally.
+6. `prompts/system_prompt.txt` & `prompts/user_prompt_template.txt`
+   - Plain-text prompt files loaded at runtime. The system prompt sets editorial voice and JSON schema. The user prompt template is formatted with the selected feed items and look-back window.
+
+7. `editorial.md`
+   - Markdown snippet manually maintained each week. Rendered as the editorial intro above the numbered items.
+
+8. Documentation
+   - Update `README.md` with setup instructions, required and optional env vars, prompt editing guidance, and how to test locally.
 
 Constraints:
 - Keep files ASCII unless the content already demands otherwise.
