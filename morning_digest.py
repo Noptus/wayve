@@ -92,6 +92,26 @@ SYSTEM_PROMPT = _load_prompt(SYSTEM_PROMPT_PATH)
 USER_PROMPT_TEMPLATE = _load_prompt(USER_PROMPT_PATH)
 
 
+def _mail_recipients() -> List[str]:
+    """Return the list of recipient email addresses."""
+    raw = os.environ.get("MAIL_TO", "")
+    recipients = [addr.strip() for addr in raw.split(",") if addr.strip()]
+    if not recipients:
+        raise SystemExit("MAIL_TO is not set or contains no valid addresses.")
+    return recipients
+
+
+def _token_usage_payload(usage: Dict[str, Any] | None) -> Dict[str, int]:
+    """Normalise token usage information from the Perplexity API."""
+    usage = usage or {}
+    prompt = int(usage.get("prompt_tokens") or 0)
+    completion = int(usage.get("completion_tokens") or 0)
+    total = int(usage.get("total_tokens") or (prompt + completion))
+    if total == 0:
+        total = prompt + completion
+    return {"prompt": prompt, "completion": completion, "total": total}
+
+
 def load_feeds(csv_path: str) -> List[dict]:
     """Return a list of feeds that have a populated RSS URL."""
     feeds: List[dict] = []
@@ -304,7 +324,7 @@ def build_fallback_digest(items: Sequence[dict]) -> Dict[str, Any]:
 
 def summarize_with_perplexity(
     items: Sequence[dict], lookback_hours: int
-) -> Dict[str, Any]:
+) -> tuple[Dict[str, Any], Dict[str, int]]:
     """Use Perplexity to build structured digest data."""
     api_key = os.environ.get("PERPLEXITY_API_KEY")
     if not api_key:
@@ -343,7 +363,9 @@ def summarize_with_perplexity(
     if not content:
         raise PerplexityError("Perplexity response missing summary content")
     payload_json = _extract_json_payload(content)
-    return _sanitize_digest_payload(payload_json, items)
+    digest = _sanitize_digest_payload(payload_json, items)
+    usage_summary = _token_usage_payload(data.get("usage"))
+    return digest, usage_summary
 
 
 def _window_description(hours: int) -> str:
@@ -577,8 +599,8 @@ def render_email(
 """
 
 
-def send_email(html_body: str, subject: str) -> None:
-    """Send the digest via Gmail SMTP."""
+def send_email(html_body: str, subject: str) -> int:
+    """Send the digest via Gmail SMTP and return recipient count."""
     import smtplib
     from email.mime.text import MIMEText
     from email.utils import formatdate
@@ -586,25 +608,39 @@ def send_email(html_body: str, subject: str) -> None:
     message = MIMEText(html_body, "html", "utf-8")
     message["Subject"] = subject
     message["From"] = os.environ["MAIL_FROM"]
-    message["To"] = os.environ["MAIL_TO"]
+    recipients = _mail_recipients()
+    message["To"] = ", ".join(recipients)
     message["Date"] = formatdate(localtime=True)
 
     try:
         with smtplib.SMTP_SSL(os.environ["SMTP_SERVER"], int(os.environ["SMTP_PORT"])) as smtp:
             smtp.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"])
-            smtp.send_message(message)
+            smtp.send_message(message, to_addrs=recipients)
     except smtplib.SMTPException as exc:
         raise RuntimeError(f"Failed to send email: {exc}") from exc
+    return len(recipients)
+
+
+def _report_delivery(recipients: int, token_usage: Dict[str, int]) -> None:
+    """Log and print a concise delivery summary."""
+    summary = (
+        f"Sent weekly brief to {recipients} recipient(s); "
+        f"Perplexity tokens — prompt: {token_usage.get('prompt', 0)}, "
+        f"completion: {token_usage.get('completion', 0)}, "
+        f"total: {token_usage.get('total', 0)}"
+    )
+    logger.info(summary)
+    print(summary)
 
 def build_digest_payload(
     items: Sequence[dict], lookback_hours: int
-) -> tuple[Dict[str, Any], bool]:
+) -> tuple[Dict[str, Any], bool, Dict[str, int]]:
     try:
-        digest = summarize_with_perplexity(items, lookback_hours)
-        return digest, False
+        digest, usage = summarize_with_perplexity(items, lookback_hours)
+        return digest, False, usage
     except PerplexityError as exc:
         logger.warning("Perplexity summarisation failed: %s", exc)
-        return build_fallback_digest(items), True
+        return build_fallback_digest(items), True, {"prompt": 0, "completion": 0, "total": 0}
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -654,18 +690,20 @@ def main(argv: Sequence[str] | None = None) -> None:
         now_local = datetime.now(_newsletter_timezone())
         _, week_range = _format_time_range(now_local, args.hours)
         subject = f"Weekly Digest — Week of {week_range} (no new items)"
-        send_email(body, subject)
+        sent = send_email(body, subject)
+        _report_delivery(sent, {"prompt": 0, "completion": 0, "total": 0})
         return
 
     selected = items[: args.topn]
-    digest, used_fallback = build_digest_payload(selected, args.hours)
+    digest, used_fallback, usage = build_digest_payload(selected, args.hours)
     body = render_email(digest, args.hours, used_fallback=used_fallback)
     now_local = datetime.now(_newsletter_timezone())
     _, week_range = _format_time_range(now_local, args.hours)
     subject = f"Weekly Digest — Week of {week_range}"
     if used_fallback:
         subject += " (headlines)"
-    send_email(body, subject)
+    sent = send_email(body, subject)
+    _report_delivery(sent, usage)
 
 
 if __name__ == "__main__":
