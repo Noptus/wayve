@@ -36,4 +36,4 @@ jobs:
           MAIL_FROM: ${{ vars.MAIL_FROM }}
           MAIL_TO: ${{ vars.MAIL_TO }}
         run: |
-          python morning_digest.py --csv rss_list.csv --topn 10 --hours 168
+          python nothing.py --csv rss_list.csv --topn 10 --hours 168
